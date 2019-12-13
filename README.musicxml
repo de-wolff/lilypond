@@ -1,0 +1,40 @@
+use of musicxml:
+
+grab musicxml.scm and xml-library.scm from scm, and put them into your scm folder 
+  (normal /usr/share/lilypond/current/scm)
+grab musicxml.ly from ly , and put it into your ly folder 
+  (normal /usr/share/lilypond/current/ly)
+
+In your lilypond sourcefile add:
+
+
+\include "musicxml.ly"
+
+
+\musicxml \mymusic
+
+optional you can also use
+
+\musicxml \musicxml-dtd \mymusic (this is the default)
+\musicxml \musicxml-xsd \mymusic
+\musicxml \musicxml-local-dtd \mymusic
+\musicxml \musicxml-local-xsd \mymusic
+
+If the terms dtd and xsd does not mean anything for you, don't use it.
+
+The last two can be used if you download the xsd or dtd from https://github.com/w3c/musicxml/releases to your own PC.
+When you want to check the generated code against the musicxml standard, this is faster
+
+
+Known limitations:
+- Engraving informetion is not used- 
+- Lyrics is supposed to be one syllabe for one note, slurs and ties are 
+  followed but timed lyrics or lyrics with auto beaming is not suppoorted.
+- Stem direction is not set.
+- Not all articulations are handled.
+  position (above below staff) of articulations, beams text, etc is not 
+- Figured bass is not supported. 
+- NullVoice is displayed as a normal voice
+- grace notes are not supported.
+- Instruments and midi instruments are not used
+- text markup is not implemented

@@ -1,0 +1,28 @@
+music = {
+  <<
+    \new Voice = "music" \relative c''{ \key c \major
+  \time 2/4  c4  d ( e ) f  ~   f4 d <d b f> e f }
+    \new Lyrics \lyricsto "music"  { a -- b -- c d e f }
+    \new Lyrics \lyricsto "music"  { _ hey _ you }
+  >>
+}
+
+\info "test lyrics"
+
+\xpath "count(//note)=11
+and string(/score-partwise/part/measure[@number=1]/note[1]/lyric[1]/text/text())='a'
+and string(/score-partwise/part/measure[@number=1]/note[1]/lyric[1]/syllabic/text())='begin'
+and string(/score-partwise/part/measure[@number=1]/note[2]/lyric[1]/text/text())='b'
+and string(/score-partwise/part/measure[@number=1]/note[2]/lyric[1]/syllabic/text())='middle'
+and string(/score-partwise/part/measure[@number=1]/note[2]/lyric[2]/text/text())='hey'
+and not (/score-partwise/part/measure[@number=1]/note[2]/lyric[2]/@number =
+         /score-partwise/part/measure[@number=1]/note[2]/lyric[1]/@number)
+and string(/score-partwise/part/measure[@number=2]/note[2]/lyric[1]/text/text())='c'
+and string(/score-partwise/part/measure[@number=2]/note[2]/lyric[1]/syllabic/text())='end'
+and string(/score-partwise/part/measure[@number=3]/note[2]/lyric[1]/text/text())='d'
+and string(/score-partwise/part/measure[@number=3]/note[2]/lyric[1]/syllabic/text())='single'
+and string(/score-partwise/part/measure[@number=3]/note[2]/lyric[2]/text/text())='you'
+and string(/score-partwise/part/measure[@number=4]/note[4]/lyric[1]/text/text())='f'
+and string(/score-partwise/part/measure[@number=4]/note[4]/lyric[1]/syllabic/text())='single'
+and count(/score-partwise/part/measure[@number=5]/note/lyric)=0
+"

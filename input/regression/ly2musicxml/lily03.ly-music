@@ -1,0 +1,6 @@
+music = { \time 2/4 c4 c4 c4 c4 }
+\info "test two measures 4 notes time 2/4"
+\xpath "count(/score-partwise/part/measure/note)=4
+and count(/score-partwise/part/measure)=2
+and string(/score-partwise/part/measure[@number=1]/attributes/time/beats)=2
+and string(/score-partwise/part/measure[@number=1]/attributes/time/beat-type)=4"

@@ -1,0 +1,37 @@
+music = { c'1 \bar ";" c'1 \bar "." c'1 \bar ".|" c'1 \bar ".."
+c'1 \bar "|.|" c'1 \bar "|." c'1 \bar "'" c'1 \bar "!" c'1 \bar "|"
+c'1 \bar "||" c'1 \bar ".|:" c'1 \bar ":|." c'1 \bar ".[|:" c'1 \bar ":|]." }
+
+\info "test barlines"
+\xpath "count(//barline)=14
+and string(/score-partwise/part/measure[@number=2]/barline/bar-style/text())='dotted'
+and count( /score-partwise/part/measure[@number=2]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=3]/barline/bar-style/text())='heavy'
+and count( /score-partwise/part/measure[@number=3]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=4]/barline/bar-style/text())='heavy-light'
+and count( /score-partwise/part/measure[@number=4]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=5]/barline/bar-style/text())='heavy-heavy'
+and count( /score-partwise/part/measure[@number=5]/barline/repeat) = 0
+and count(/score-partwise/part/measure[@number=6]/barline)=1
+and count( /score-partwise/part/measure[@number=6]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=7]/barline/bar-style/text())='light-heavy'
+and count( /score-partwise/part/measure[@number=7]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=8]/barline/bar-style/text())='tick'
+and count( /score-partwise/part/measure[@number=8]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=9]/barline/bar-style/text())='dashed'
+and count( /score-partwise/part/measure[@number=9]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=10]/barline/bar-style/text())='regular'
+and count( /score-partwise/part/measure[@number=10]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=11]/barline/bar-style/text())='light-light'
+and count( /score-partwise/part/measure[@number=11]/barline/repeat) = 0
+and string(/score-partwise/part/measure[@number=12]/barline[1]/bar-style/text())='heavy-light'
+and string(/score-partwise/part/measure[@number=12]/barline[1]/repeat/@direction)='forward'
+and string(/score-partwise/part/measure[@number=12]/barline[2]/bar-style/text())='light-heavy'
+and string(/score-partwise/part/measure[@number=12]/barline[2]/repeat/@direction)='backward'
+and string(/score-partwise/part/measure[@number=14]/barline[1]/bar-style/text())='heavy-light'
+and string(/score-partwise/part/measure[@number=14]/barline[1]/repeat/@direction)='forward'
+and string(/score-partwise/part/measure[@number=14]/barline[1]/repeat/@winged)='curved'
+and string(/score-partwise/part/measure[@number=14]/barline[2]/bar-style/text())='light-heavy'
+and string(/score-partwise/part/measure[@number=14]/barline[2]/repeat/@direction)='backward'
+and string(/score-partwise/part/measure[@number=14]/barline[2]/repeat/@winged)='curved'
+"

@@ -1,0 +1,15 @@
+music = \relative c''{
+ c4-^ d-+ e-- f-! g,4-> a-. b-_
+}
+
+\info "test accidentals"
+
+\xpath "count(//note)=7
+and count(/score-partwise/part/measure[@number=1]/note[1]/notations/articulations/strong-accent)=1
+and count(/score-partwise/part/measure[@number=1]/note[2]/notations/technical/stopped)=1
+and count(/score-partwise/part/measure[@number=1]/note[3]/notations/articulations/tenuto)=1
+and count(/score-partwise/part/measure[@number=1]/note[4]/notations/articulations/staccatissimo)=1
+and count(/score-partwise/part/measure[@number=2]/note[1]/notations/articulations/accent)=1
+and count(/score-partwise/part/measure[@number=2]/note[2]/notations/articulations/staccato)=1
+and count(/score-partwise/part/measure[@number=2]/note[3]/notations/articulations/detached-legato)=1
+"

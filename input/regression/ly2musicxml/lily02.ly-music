@@ -1,0 +1,9 @@
+music = { c4 }
+\info "test of placing a quarter note"
+\xpath "count(/score-partwise/part/measure/note)=1 
+and string(/score-partwise/part/measure/note/type/text())='quarter'
+and string(/score-partwise/part/measure/note/pitch/step/text())='C'
+and string(/score-partwise/part/measure/note/pitch/alter/text())='0'
+and string(/score-partwise/part/measure/note/pitch/octave/text())='3'
+and string(/score-partwise/part/measure/note/duration/text()) = 
+    string(/score-partwise/part/measure/attributes/divisions)"

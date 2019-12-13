@@ -1,0 +1,32 @@
+  music = \score {
+  \header {
+  copyright = "copyright"
+  title = "title"
+  composer = "composer"
+  arranger = "arranger"
+  metre = "metre"
+  opus = "opus"
+  poet = "poet"
+  copyright = "copyright"
+  enteredby = "enteredby"
+  source = "source"
+  }
+ c4 }
+
+\info "test local headers"
+
+% instrument, piece and subtitle are now placed at miscellaneous
+% not sure if this is the right place, so not tested
+% also mark that musicxml has an element definition opus, but this is
+% not referring to the opus as known by lilypond
+
+\xpath "count(//note)=1
+and string(/score-partwise/work/work-number/text())='opus'
+and string(/score-partwise/work/work-title/text())='title'
+and string(/score-partwise/identification/creator[@type='arranger']/text())='arranger'
+and string(/score-partwise/identification/creator[@type='composer']/text())='composer'
+and string(/score-partwise/identification/creator[@type='poet']/text())='poet'
+and string(/score-partwise/identification/rights/text())='copyright'
+and string(/score-partwise/identification/encoding/encoder/text())='enteredby'
+and string(/score-partwise/identification/source/text())='source'
+"

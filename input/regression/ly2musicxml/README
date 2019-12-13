@@ -1,0 +1,4 @@
+
+For testing lilypond, xsltproc and guile are used.
+Guile needs to get the commandliine as an argument
+-L GUILE_LOAD_PATH=$HOME/build/out/share/lilypond/current/

@@ -1,0 +1,3 @@
+music = { a }
+\info "test part id matches"
+\xpath "/score-partwise/part-list/score-part/@id = /score-partwise/part/@id"

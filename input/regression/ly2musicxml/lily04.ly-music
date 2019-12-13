@@ -1,0 +1,28 @@
+music = { \time 4/2 c\breve c1 c2 c4 c8 c16 c32 c64 c64}
+\info "test length of notes"
+\xpath "count(/score-partwise/part/measure/note)=9
+and count(/score-partwise/part/measure)=2
+and /score-partwise/part/measure/attributes/divisions * 8 =
+    /score-partwise/part/measure[1]/note[1]/duration
+and /score-partwise/part/measure/attributes/divisions * 4 =
+    /score-partwise/part/measure[2]/note[1]/duration
+and /score-partwise/part/measure/attributes/divisions * 2 =
+    /score-partwise/part/measure[2]/note[2]/duration
+and /score-partwise/part/measure/attributes/divisions =
+    /score-partwise/part/measure[2]/note[3]/duration
+and /score-partwise/part/measure/attributes/divisions =
+    /score-partwise/part/measure[2]/note[4]/duration * 2
+and /score-partwise/part/measure/attributes/divisions =
+    /score-partwise/part/measure[2]/note[5]/duration * 4
+and /score-partwise/part/measure/attributes/divisions =
+    /score-partwise/part/measure[2]/note[6]/duration * 8
+and /score-partwise/part/measure/attributes/divisions =
+    /score-partwise/part/measure[2]/note[7]/duration * 16
+and /score-partwise/part/measure[1]/note[1]/type = 'breve'
+and /score-partwise/part/measure[2]/note[1]/type = 'whole'
+and /score-partwise/part/measure[2]/note[2]/type = 'half'
+and /score-partwise/part/measure[2]/note[3]/type = 'quarter'
+and /score-partwise/part/measure[2]/note[4]/type = 'eighth'
+and /score-partwise/part/measure[2]/note[5]/type = '16th'
+and /score-partwise/part/measure[2]/note[6]/type = '32nd'
+and /score-partwise/part/measure[2]/note[7]/type = '64th' "

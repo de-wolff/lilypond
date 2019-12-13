@@ -32,6 +32,9 @@
 .dotest
 .gdbinit
 .htaccess
+*musicxml-debug.*
+.vscode
+/fonts
 /*.abc
 /*.html
 /*.ly
