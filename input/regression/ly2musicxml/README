@@ -1,4 +1,24 @@
-
 For testing lilypond, xsltproc and guile are used.
+
 Guile needs to get the commandliine as an argument
 -L GUILE_LOAD_PATH=$HOME/build/out/share/lilypond/current/
+
+In all tests where lilypond is used, Lilypond is called with environment 
+settings causing invalid arguments in different scheme functions to generate 
+a fault.
+
+There are three categories of tests:
+The first category (at this moment containing one test) is to test if a fault 
+is generated if we expect a fault.
+
+The second category is testing whether the scheme implementation of 
+xml functions (xml-library.scm) is correct. 
+In those tests lilypond is not used, only guile is used.
+
+The third category is testing whether lilypond music can generate correct 
+musicxml.
+
+All categories of tests result in a 3 files:
+- a xml files
+- a info files
+- a xpath file
