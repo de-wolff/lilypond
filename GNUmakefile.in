@@ -293,6 +293,7 @@ test: test-pre
 	$(MAKE) -C input/regression out=test lysdoc-gittxt lysdoc-test
 	$(MAKE) -C input/regression/midi out=test lysdoc-test
 	$(MAKE) -C input/regression/musicxml out=test lysdoc-test
+	$(MAKE) -C input/regression/ly2musicxml out=test local-test
 	$(MAKE) -C input/regression/abc2ly out=test lysdoc-test
 	$(MAKE) -C input/regression/lilypond-book out=test local-test
 
@@ -318,6 +319,7 @@ test-baseline: test-baseline-pre
 	$(MAKE) out=test -C input/regression local-test-baseline
 	$(MAKE) out=test -C input/regression/midi local-test-baseline
 	$(MAKE) out=test -C input/regression/musicxml local-test-baseline
+	$(MAKE) out=test -C input/regression/ly2musicxml local-test-baseline
 	$(MAKE) out=test -C input/regression/abc2ly local-test-baseline
 	$(MAKE) out=test -C input/regression/lilypond-book local-test-baseline
 	$(MAKE) test-snippets-clean
