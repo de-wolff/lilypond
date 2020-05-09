@@ -1,3 +1,37 @@
+; This module makes it possible to create musicxml out of lilypond music.
+; It heavenly depends on the (scm xml-library) with is a (partial)
+; implementation of the W3C DOM standard
+; The way this is done has different stages:
+;
+; * Create a blank musicxml document (create-empty-document)
+; * Dig out the musical information (music->music-item), and while digging
+;   create a tree of staffs and voices within the staff, at the same time collect
+;   all voices, associate them with a staff, collect all time signatures, put
+;   a timestamp on them and collect all notes, associate them with a voice
+;   and put a timestamp on them. During collection of the notes the
+;   musicxml-elements for the notes are already created, but not yet added to
+;   the document
+;
+; * Collect non music information (create-doc-identification-elements)
+;   (as in header is defined ) and create xml-elements containing those
+;   information, and add this information to the musicxml document
+;
+; * Based on the collected information create staffs in the document,
+;   (allocate-elements-to-measures) create measures in the staff based on the
+;   collected time signatures.
+;   Add the notes in the staves based on the voice and staff association,
+;   put them in the right measure based upon the collected time information.
+;
+; * post process (cleanup) the generated document to put things in the right
+;   order, remove duplicates etc.
+; * format the document (xml:formatDocument)
+; * send the document to the output port. (xml:write)
+;
+; of course this is only a very brief description, more information can
+; be found in the documentation of the functions and the classes
+;
+; 
+;
 
 (define-module (scm musicxml)
   #:use-module (ice-9 format)
@@ -36,7 +70,7 @@
 
 ; syntax: assert ?expr ?expr ... [report: ?r-exp ?r-exp ...]
 ;
-; assert is a nop operation if at the moment of loading this module
+; assert is a NOP operation if at the moment of loading this module
 ; the (operating system) environment variable DEBUG was not defined
 ;
 ; otherwise :
@@ -82,13 +116,21 @@
 ;  So when we do a xml:setAttribute with a integer, the xml:getAttribute will
 ;  return an integer.
 ;  This can be useful when we want to use xml-nodes to exchange information.
-;  At this moment string, symbol and integer can be used as basic-value, but it is easy to extend this in the future.
+;  At this moment string, symbol and integer can be used as basic-value, but it
+; is easy to extend this in the future.
 
 (define basic-value? (lambda(value)
     (or (string? value)(symbol? value)(integer? value))))
 
 
 ;insert item in ordered list. Ordering is done using the predicate
+; arguments:
+;   lst: the list to insert in
+;   value: the value to insert in the list (can be any type)
+;   keyfn: the function to get the key from the value
+;       (and the other values in the list)
+;   predicate: a function comparing two keys and returning true when
+;       the value must be inserted (normally the predicate is > or < )
 (define insert-in-ordered-list (lambda (lst value keyfn predicate)
   (assert (list? lst)
         report: '@insert-in-ordered-list )
@@ -100,8 +142,13 @@
             (else (cons (car lst) (insert (cdr lst) v)))))))
     (insert lst value))))
 
-; insert key value in ordered alist.
-; Ordering is done using the predicate on the key
+; insert key value pair in ordered alist.
+; arguments:
+;   lst: the collection to insert in
+;   key: the key to insert
+;   value: the value to insert in the collection (can be any type)
+;   predicate: a function comparing two keys and returning true when
+;       the pair must be inserted (normally the predicate is > or < )
 (define insert-in-ordered-alist (lambda (lst key value predicate)
   (assert (list? lst)
         report: '@insert-in-ordered-alist )
@@ -114,8 +161,13 @@
     (insert lst key value))))
 
 ; insert key value in ordered alist.
-; only add items if the key does not exists
-; Ordering is done using the predicate on the key
+; only add this pair if the key is not yet in the collection
+; arguments:
+;   lst: the list to insert in
+;   key: the key to insert
+;   value: the value to insert in the list (can be any type)
+;   predicate: a function comparing two keys and returning true when
+;       the pair must be inserted (normally the predicate is > or < )
 (define insert-in-ordered-alist-if-new (lambda (lst key value predicate)
   (assert (list? lst)
         report: '@insert-in-ordered-alist-if-new)
@@ -124,7 +176,7 @@
       (insert-in-ordered-alist lst key value predicate))
       (else lst)))))
 
-;; some warning error helpers
+; a wrapper around ly:warning, so the module that causes the warning is clear
 (define warning (lambda (txt)
   (ly:warning (string-append "musicxml.scm: " txt "\n"))))
 
@@ -133,23 +185,60 @@
 ;; the methods in xml-library are according to the DOM specification,
 ;; this are additional methods, not found in the DOM specification
 
-(define xml:xml:get-children-by-name (lambda (node tag-name)
-  (assert (xml:element? node)
+
+; xml:get-children-by-name.
+; Returns a list of all the xml:element's in order with a given tag
+; name and are direct children of the element.
+;
+; Parameters
+; self: the node on which the operation is performed
+; tag-name: The name of the elements to match on.
+;
+; Return Value
+; A new list containing the matched xml:element's.
+;
+; remark: in contrast with xml:getElementsByTagName this function only
+; matches on the direct children, not the grand-children etc
+
+(define xml:get-children-by-name (lambda (self tag-name)
+  (assert (xml:element? self)
           (symbol? tag-name)
           report: '@xml:get-children-by-name)
   (filter (lambda (n)
     (and (xml:element? n)
-        (equal? (xml:nodeName n) tag-name))) (xml:childNodes node))))
+        (equal? (xml:nodeName n) tag-name))) (xml:childNodes self))))
 
-(define xml:get-child-by-name (lambda (node tag-name)
-  (assert (xml:element? node)
+; xml:get-child-by-name.
+; Returns the first element with a given tag-name that
+;   is a direct children of the element.
+;
+; Parameters
+; self: the node on which the operation is performed
+; tag-name: The name of the elements to match on.
+;
+; Return Value
+; The first matched xml:element's, or empty is no  element
+;
+(define xml:get-child-by-name (lambda (self tag-name)
+  (assert (xml:element? self)
           (symbol? tag-name)
           report: '@xml:get-child-by-name)
-  (let ((node (find (lambda (n)
+  (let ((self (find (lambda (n)
         (and (xml:element? n) (equal? (xml:nodeName n) tag-name)))
-      (xml:childNodes node))))
-    (if node node '()))))
+      (xml:childNodes self))))
+    (if self self '()))))
 
+; xml:element-value
+; Returns the non-whitespace text contained in the element.
+;
+; Parameter
+; self: the node on which the operation is performed
+;
+; Return Value
+; The first matched xml:element's, or empty is no  element
+;
+; Remark: the return value can be a text, a symbol or a number.
+; this is depending on what is set as text.
 (define xml:element-value (lambda (self)
   (assert (xml:element? self)
           report: '@xml:element-value)
@@ -165,14 +254,26 @@
   (xml:childNodes self))
   result)))
 
+; make-xml-item.
+; create an xml:element with content.
+;
+; Parameters:
+;   doc:   The xml doc for which the element is created
+;   tag:   The tag-name of the element to create.
+;   value: The content of the element.
+;     In case the value is a basic-value (string, symbol, number)
+;       a textnode is created with the value as text value,
+;       and this textnode is appended to the created element
+;     In case the value is an element, it is added as child
+;       to the created element
+;     In case the value is a list, it is handled as an alist,
+;       and each contained pair is inserted as attribute value pair
 (define make-xml-item (lambda (doc tag value)
   (assert (xml:document? doc)
           (symbol? tag)
-          (or (symbol? value)
-              (string? value)
-              (integer? value)
+          (or (basic-value? value)
               (list? value)
-              (xml:element? value))
+              (xml:node? value))
           report: '@make-xml-item)
   (let* ((result (xml:createElement doc tag)))
   (cond ((list? value)
@@ -180,7 +281,7 @@
       (cond ((pair? attribute) (xml:setAttribute result (car attribute)
                                                (cdr attribute) )))) value)
     )
-    ((xml:element? value)
+    ((xml:node? value)
       (xml:appendChild result value)
     )
     (else
@@ -188,18 +289,22 @@
         (xml:appendChild result text-node))))
   result)))
 
+; a class containing a time signature.
 (define-class <time-signature> ()
   (numerator #:init-value 4 #:init-keyword #:numerator
       #:accessor time-signature:numerator #:type <integer>)
   (denominator #:init-value 4 #:init-keyword #:denominator
       #:accessor time-signature:denominator #:type <integer>))
 
+; predicate for checking wether a object is a <time-signature>
 (define time-signature? (lambda (self)  (is-a? self <time-signature>)))
 
+; create a time signature from an musicxml 'time' element
 (define make-time-signature (lambda (item)
   (assert (xml:element? item)
           report: '@make-time-signature)
-  (begin
+    ;todo: add handling for improper elements
+    ;   throw exception?
     (cond ((equal? (xml:nodeName item) 'time)
       (let* ((numerator-item (xml:get-child-by-name  item 'beats))
           (denominator-item (xml:get-child-by-name  item 'beat-type))
@@ -207,14 +312,25 @@
           (denominator (xml:element-value denominator-item)))
         (make <time-signature>
           #:numerator  numerator
-          #:denominator denominator )))))))
+          #:denominator denominator ))))))
 
+; calculate the number of ticks for the given time-signature (musicxml divisions)
+;    in one measure
+;
+; Parameter: self: the time-signature to use
+;
+; Returns: the number of ticks for the given time-signature
 (define time-signature:get-measure-ticks (lambda (self)
   (assert (time-signature? self)
           report: '@time-signature:get-measure-ticks)
   (/ (* ticks-per-whole (time-signature:numerator self))
         (time-signature:denominator self))))
 
+; create an musicxml time signature
+;
+; Parameter: self: the time-signature to use
+;
+; Returns: a xml:element according to the musicxml 'time' specification
 (define time-signature->xml-item (lambda (self doc)
   (assert (time-signature? self)
           (xml:document? doc)
@@ -232,8 +348,15 @@
     (xml:appendChild time-item beat-type-item)
     time-item)))
 
-(define get-item-duration (lambda (item)
-  (assert (xml:element? item)
+; get-item-duration:
+;
+; get the duration (in ticks) of the given xml:element.
+; The element should be one of note, lyric or figured bass
+; Parameters:
+;     element: The element to be digged
+; Returns: the duration of the element, if available, else 0
+(define get-item-duration (lambda (element)
+  (assert (xml:element? element)
           report: '@get-item-duration)
   (letrec ((duration-item-names '(note lyric figured-bass))
       (get-duration-item
@@ -243,7 +366,7 @@
             ((xml:element? (xml:get-child-by-name item (car lst)))
                 (xml:get-child-by-name item (car lst)))
             (else (get-duration-item item (cdr lst)))))))
-    (let ((duration-note (get-duration-item item duration-item-names)))
+    (let ((duration-note (get-duration-item element duration-item-names)))
       (cond ((xml:element? duration-note)
         (let* ((duration (xml:get-child-by-name duration-note 'duration)))
           (xml:element-value duration)))
@@ -252,6 +375,7 @@
 ;forward definition
 (define-class <music-tree> ())
 
+; a class representing a tree.
 (define-class <music-tree> ()
   (ticks #:init-value 0 #:init-keyword #:ticks
       #:accessor music-tree:ticks #:type <integer>)
@@ -270,9 +394,21 @@
       #:type <list>)
 )
 
+; predicate for checking wether a object is a <music-tree>
 (define music-tree? (lambda (self)  (is-a? self <music-tree>)))
 
-(define* (make-music-tree item-nr event current-branch #:optional (ticks 0))
+; constructor for a <music-tree> instance
+; parameters:
+;   item-nr:
+;     staff-nr or voice-nr which are represented by this branch
+;   event:
+;     The event that causes this new branch to be created
+;     (eg StaffGroup or Staff)
+;   current-branch:
+;     The parent branch of this newly created branch
+;   ticks:
+;     The position where this branch is started
+  (define* (make-music-tree item-nr event current-branch #:optional (ticks 0))
   (assert (integer? item-nr)
           (symbol? event)
           (music-tree? current-branch)
@@ -288,6 +424,16 @@
         (cons result (music-tree:branches current-branch)))
     result))
 
+; create a new <music-tree> instance based on another branch,
+; the parent is changed, and the child branches are not copied
+; parameters:
+;   self:
+;     The item to be copied
+;   current-branch:
+;     The parent branch of the item to create
+;   tag:
+;     Information to add to the item.
+;     This can be used to store information related to this branch
 (define make-music-tree-copy (lambda (self current-branch tag)
   (assert (music-tree? self)
           (music-tree? current-branch)
@@ -301,12 +447,16 @@
         (insert-in-ordered-list (music-tree:branches current-branch)
             result music-tree:item-nr >))
     result)))
-
+; return the parent of the current branch
 (define music-tree:previous (lambda (self)
   (assert (music-tree? self)
           report: '@music-tree:previous)
   (music-tree:parent self)))
 
+; An object representing the contents of one voice
+; It contains a ordered list of xml-elements of this voice
+; The list can contain notes, but also other attributes
+; Ordering is done based on the tick position
 (define-class <voice-list> ()
   (id #:init-value #f #:init-keyword #:id #:accessor voice-list:id  #:setter voice-list:set-id!)
   (cue-voice #:init-value #f #:init-keyword #:cue-voice
@@ -320,10 +470,17 @@
       #:accessor voice-list:collected-xml-nodes
       #:setter voice-list:set-collected-xml-nodes! #:type <list>))
 
+; constructor for <voice-list>
 (define make-voice-list (lambda () (make <voice-list>)))
 
+; predicate for checking wether a object is a <voice-list>
 (define voice-list? (lambda (self)  (is-a? self <voice-list>)))
 
+; insert a new xml element in the given node-list
+; parameters:
+; self
+; ticks: the position in
+; item: The xml element to be inserted
 (define voice-list:insert-xml-item  (lambda (self ticks item)
   (assert (voice-list? self)
           (integer? ticks)
@@ -335,6 +492,9 @@
       (insert-in-ordered-alist
           (voice-list:collected-xml-nodes self) ticks item >))))
 
+; An object representing the contents of one part (staff)
+; A list of ordered voice-lists
+; ordering is done on voice number
 (define-class <part-list> ()
   (has-lyrics #:init-value #f #:init-keyword #:has-lyrics
       #:accessor part-list:has-lyrics #:setter part-list:set-has-lyrics!
@@ -348,10 +508,24 @@
   (voices #:init-value '() #:init-keyword #:voices #:accessor part-list:voices
       #:setter part-list:set-voices! #:type <list>))
 
+; constructor for <part-list>
 (define make-part-list (lambda () (make <part-list>)))
 
+; predicate for checking wether a object is a <part-list>
 (define part-list? (lambda (self)  (is-a? self <part-list>)))
 
+; insert a xml-element in this part.
+; The xml element is inserted in the associated voice-list.
+; if this associated list does not exist yet, it is created first
+; parameters:
+;   self:
+;     The part-list where the element should be inserted
+;   ticks:
+;     The position of the xml:element
+;   voice:
+;     The voice nr associated with the element
+;   item:
+;     The xml:element to be inserted
 (define part-list:insert-xml-item  (lambda (self ticks voice item)
   (assert (part-list? self)
           (integer? ticks)
@@ -372,10 +546,18 @@
             (insert-in-ordered-alist lst voice collection >))))
     (voice-list:insert-xml-item collection ticks item))))
 
-(define part-list:add-voice-id (lambda (self voice id)
+; Add a identification name for a voice (nr)
+; parameters:
+;   self:
+;     The part-list where the voice identification name should be added.
+;   voice:
+;     The voice nr associated with the identification
+;   id:
+;     The identification for the voice
+(define part-list:add-voice-identification (lambda (self voice identification)
   (assert (part-list? self)
           (integer? voice)
-          report: '@part-list:add-voice-id)
+          report: '@part-list:add-voice-identification)
   (let* ((lst (part-list:voices self))
       (collection-pair (assq voice lst))
       (collection '()))
@@ -384,9 +566,17 @@
         (set! collection (make-voice-list))
         (part-list:set-voices! self
             (insert-in-ordered-alist lst voice collection >))))
-    (voice-list:set-id! collection id))))
+    (voice-list:set-id! collection identification))))
 
-(define part-list:get-voice (lambda (self associated)
+; get voice based on an identification name
+; parameters:
+;   self:
+;     The part-list where the voice identification name should be added.
+;   identification:
+;     The identification of the voice
+; Returns:
+;   The voice with the given identification
+(define part-list:get-voice (lambda (self identification)
   (assert (part-list? self)
           report: '@part-list:get-voice)
   (letrec ((lst (part-list:voices self))
@@ -395,12 +585,20 @@
             ((not (pair? (car lst))) '())
             ((equal? (voice-list:id (cdar lst)) voice) (cdar lst))
             (else (get-voice (cdr lst) voice))))))
-    (get-voice lst associated))))
+    (get-voice lst identification))))
 
-(define part-list:set-element-voice (lambda (self voice fn)
+; find the given voice and apply the given setter in it
+;   self:
+;     The part-list where the voice should be found
+;   voice:
+;     The voice nr to be found
+;   setter:
+;     Function with prototype (fn <voice-list> <boolean>)
+;     The setter that should be set in this voice-list
+(define part-list:set-voice-setter (lambda (self voice setter)
   (assert (part-list? self)
           (integer? voice)
-          report: '@part-list:set-element-voice)
+          report: '@part-list:set-voice-setter)
   (let* ((lst (part-list:voices self))
       (collection-pair (assq voice lst))
       (collection '()))
@@ -409,23 +607,33 @@
         (set! collection (make-voice-list))
         (part-list:set-voices! self
             (insert-in-ordered-alist lst voice collection >))))
-    (fn collection #t))))
+    (setter collection #t))))
 
+; mark the given voice as cue voice
+;   self:
+;     The part-list where the voice should be found
+;   voice:
+;     The voice that should be marked as a cue voice
 (define part-list:set-cue-voice (lambda (self voice)
   (assert (part-list? self)
           (integer? voice)
           report: '@part-list:set-cue-voice)
-  (part-list:set-element-voice self voice voice-list:set-cue-voice!)))
+  (part-list:set-voice-setter self voice voice-list:set-cue-voice!)))
 
+; mark the given voice as null voice
+;   self:
+;     The part-list where the voice should be found
+;   voice:
+;     The voice that should be marked as a null voice
 (define part-list:set-null-voice (lambda (self voice)
   (assert (part-list? self)
           (integer? voice)
           report: '@part-list:set-null-voice)
-  (part-list:set-element-voice self voice voice-list:set-null-voice!)))
+  (part-list:set-voice-setter self voice voice-list:set-null-voice!)))
 
 ; a class to hold items common to all voices at the same time,
-; together with a running time position
-
+; together with a running time position, running voice and staff
+; also the collected note and staff information is placed in the staves
 (define-class <music-information> ()
   (time-signatures #:init-value '() #:init-keyword #:time-signatures
     #:accessor music-information:time-signatures
@@ -454,30 +662,38 @@
       #:accessor music-information:staves
       #:setter music-information:set-staves! #:type <list>))
 
+; constructor for <music-information>
 (define make-music-information (lambda ()
   (make <music-information>)))
 
+; predicate for checking wether a object is a <music-information>
 (define music-information? (lambda (self)  (is-a? self <music-information>)))
 
-(define music-information:clone (lambda (self)
+; append a number of ticks to the current position.
+; if needed update the max-position
+; parameters:
+;   self:
+;     the music-information instance to use
+;   ticks:
+;     The number of ticks to be added to the current position
+(define music-information:append-ticks (lambda (self ticks)
   (assert (music-information? self)
-          report: '@music-information:clone)
-  (make <music-information>
-    #:time-signatures (music-information:time-signatures self )
-    #:ticks (music-information:ticks self )
-    #:document (music-information:document self )
-    #:staff-nr (music-information:staff-nr self)
-    #:voice-nr (music-information:voice-nr self)
-    #:max-voice-nr (music-information:max-voice-nr self))))
-
-(define music-information:append-ticks (lambda (self value)
-  (assert (music-information? self)
-          (integer? value)
+          (integer? ticks)
           report: '@music-information:append-ticks)
-  (music-information:set-ticks! self  (+ (music-information:ticks self) value))
+  (music-information:set-ticks! self  (+ (music-information:ticks self) ticks))
   (cond ((> (music-information:ticks self) (music-information:max self))
     (music-information:set-max! self (music-information:ticks self))))))
 
+; Insert a time-signature in the ordered list containing all time-signatures
+; of the music system.
+; Only insert if there is not yet a time-signature at the given position
+; parameters:
+;   self:
+;     the music-information instance to use
+;   ts:
+;     The time-signature to insert
+;   absolute-ticks:
+;     The time in ticks from the beginning of the music
 (define music-information:insert-time-signature
       (lambda (self ts absolute-ticks)
   (assert (music-information? self)
@@ -488,24 +704,54 @@
     (insert-in-ordered-alist-if-new (music-information:time-signatures self)
         absolute-ticks ts >))))
 
-(define music-information:append-time-signature (lambda (self  element)
+; Insert a time-signature in the ordered list containing all time-signatures
+; of the music system at the current position.
+; Only insert if there is not yet a time-signature at the given position
+; parameters:
+;   self:
+;     the music-information instance to use
+;   element:
+;     The xml:element representing a time-signature
+(define music-information:insert-time-signature-element (lambda (self  element)
   (assert (music-information? self)
           (xml:element? element)
-          report: '@music-information:append-time-signature)
+          report: '@music-information:insert-time-signature-element)
   (let* ((absolute-ticks (music-information:ticks self))
       (ts (make-time-signature element)))
         (music-information:insert-time-signature self ts absolute-ticks))))
 
-(define music-information:append-time-signature-with-offset
+; Insert a time-signature in the ordered list containing all time-signatures
+; of the music system with an offset from the current position.
+; Only insert if there is not yet a time-signature at the given position
+; parameters:
+;   self:
+;     the music-information instance to use
+;   element:
+;     The xml:element representing a time-signature
+;   offset:
+;    The distance to the current position where the time-signature should
+;    be inserted
+(define music-information:insert-time-signature-element-with-offset
       (lambda (self element offset)
   (assert (music-information? self)
           (xml:element? element)
           (integer? offset)
-          report: '@music-information:append-time-signature-with-offset)
+          report: '@music-information:insert-time-signature-element-with-offset)
   (let* ((absolute-ticks (+ (music-information:ticks self) offset))
       (ts (make-time-signature element)))
         (music-information:insert-time-signature self ts absolute-ticks))))
 
+; get the time signature which is in charge at the given position
+; This means the time signature at the given position, or the last one before.
+;
+; parameters:
+;   self:
+;     the music-information instance to use
+;   ticks:
+;     The time in ticks of which we need to know the time-signature in charge
+;
+;  returns:
+;    the requested time-signature
 (define music-information:get-ts@-or-before (lambda (self ticks)
   (assert (music-information? self)
           (integer? ticks)
@@ -513,31 +759,43 @@
   (find (lambda (n) (<= (car n) ticks))
       (music-information:time-signatures self))))
 
-;; find all time attributes
-;; it is possible a time key is not in all parts,
-;; but it should be applied to all parts at the same time
+; find all time signatures and update (tick) position
+; it is possible a time signatures is not specified in all staves,
+; but it should be applied to all staves at the same measure
+; ignore ticks is for those situations where appending the duration of
+; the note should not give the right time information.
+; This is (currently) true for lyrics, and chord notes
 
-(define music-information:collect-time-signatures
+; parameters:
+;   self:
+;     the music-information instance to use
+;   attributes:
+;     the current musicxml attributes element
+;   notes:
+;     The current musicxml note element
+;   ignore-ticks:
+;     If set, do not update time information
+(define music-information:collect-time-signatures-and-update-position
     (lambda (self attributes note-item ignore-ticks)
   (assert (music-information? self)
           (xml:element? attributes)
           (xml:element? note-item)
           (boolean? ignore-ticks)
-          report: '@music-information:collect-time-signatures)
+          report: '@music-information:collect-time-signatures-and-update-position)
   (let* ((ticks (get-item-duration note-item))
     (append-item (xml:get-child-by-name attributes 'partial))
     (time-item (xml:get-child-by-name attributes 'time))
     (measure-ticks (if (xml:element? time-item)
-                            (music-xml->ticks time-item)
+                            (music-xml->ticks/measure time-item)
                              default-measure-ticks)))
     (begin
       (cond ((xml:element? time-item)
         (cond ((xml:element? append-item)
           (let ((partial (xml:element-value append-item)))
-              (music-information:append-time-signature-with-offset
+              (music-information:insert-time-signature-element-with-offset
                   self time-item (- partial measure-ticks))))
           (else
-          (music-information:append-time-signature self time-item))))
+          (music-information:insert-time-signature-element self time-item))))
         ; will later be reinserted in all parts
         (xml:removeChild attribute time-item)
       )
@@ -545,7 +803,16 @@
         '()
         (music-information:append-ticks self ticks ))))))
 
-
+; insert an xml element at the given position (time-stamp in ticks)
+; it will be inserted in the current voice at the current stave
+;
+; parameters:
+;   self:
+;     the music-information instance to use
+;   item:
+;     the (musicxml) element that should be inserted
+;   position:
+;     The (tick) position where the element is inserted
 (define music-information:insert-xml-element@ (lambda (self item position)
   (assert (music-information? self)
           (xml:element? item)
@@ -566,6 +833,14 @@
             (insert-in-ordered-alist lst staff collection >))))
     (part-list:insert-xml-item collection position voice item))))
 
+; insert an xml element at the current position, in the current voice
+; at the current stave
+;
+; parameters:
+;   self:
+;     the music-information instance to use
+;   item:
+;     the (musicxml) element that should be inserted
 (define music-information:insert-xml-element (lambda (self item)
   (assert (music-information? self)
           (xml:element? item)
@@ -573,6 +848,17 @@
   (music-information:insert-xml-element@
     self item (music-information:ticks self))))
 
+; find the given staff and voice and apply the given function on it
+;   self:
+;     the music-information instance to use
+;   staff:
+;     The staff nr to be used
+;   voice:
+;     The voice nr to be used
+;   fn:
+;     Function with prototype (fn <part-list> <integer>)
+;     The function that should be called in the part-list with voice
+;     as an argument
 (define music-information:set-element-part (lambda (self staff voice fn)
   (assert (music-information? self)
           (integer? staff)
@@ -588,6 +874,13 @@
             (insert-in-ordered-alist lst staff collection >))))
     (fn collection voice))))
 
+; mark the given voice in the given staff as cue voice
+;   self:
+;     the music-information instance to use
+;   staff:
+;     The staff nr to be used
+;   voice:
+;     The voice nt to be used
 (define music-information:set-cue-voice (lambda (self staff voice)
   (assert (music-information? self)
           (integer? staff)
@@ -596,6 +889,13 @@
   (music-information:set-element-part
       self staff voice part-list:set-cue-voice)))
 
+; mark the given voice in the given staff as null voice
+;   self:
+;     the music-information instance to use
+;   staff:
+;     The staff nr to be used
+;   voice:
+;     The voice nt to be used
 (define music-information:set-null-voice (lambda (self staff voice)
   (assert (music-information? self)
           (integer? staff)
@@ -604,11 +904,18 @@
   (music-information:set-element-part
       self staff voice part-list:set-null-voice)))
 
-
-(define music-information:add-staff-id (lambda (self staff id)
+; Add a identification name for a staff (nr)
+; parameters:
+;   self:
+;     the music-information instance to use
+;   staff:
+;     The staff nr associated with the identification
+;   id:
+;     The identification for the staff
+(define music-information:add-staff-identification (lambda (self staff id)
   (assert (music-information? self)
           (integer? staff)
-          report: '@music-information:add-staff-id)
+          report: '@music-information:add-staff-identification)
   (let* ((lst (music-information:staves self))
       (collection-pair (assq staff lst))
       (collection '()))
@@ -619,11 +926,21 @@
             (insert-in-ordered-alist lst  staff collection >))))
     (part-list:set-id! collection id))))
 
-(define music-information:add-voice-id (lambda (self staff voice id)
+; Add a identification name for a voice (nr)
+; parameters:
+;   self:
+;     the music-information instance to use
+;   staff:
+;     The staff nr containing this voice
+;   voice:
+;     The voice nr associated with the identification
+;   id:
+;     The identification for the voice
+(define music-information:add-voice-identification (lambda (self staff voice id)
   (assert (music-information? self)
           (integer? staff)
           (integer? voice)
-          report: '@music-information:add-voice-id)
+          report: '@music-information:add-voice-identification)
   (let* ((lst (music-information:staves self))
       (collection-pair (assq staff lst))
       (collection '()))
@@ -632,9 +949,17 @@
         (set! collection (make-part-list))
         (music-information:set-staves! self
             (insert-in-ordered-alist lst staff collection >))))
-    (part-list:add-voice-id collection voice id))))
+    (part-list:add-voice-identification collection voice id))))
 
-(define music-information:get-voice (lambda (self associated)
+; get voice based on an identification name
+; parameters:
+;   self:
+;     The part-list where the voice identification name should be added.
+;   identification:
+;     The identification of the voice
+; Returns:
+;   The voice with the given identification
+(define music-information:get-voice (lambda (self identification)
   (assert (music-information? self)
           report: '@music-information:get-voice)
   (letrec ((lst (music-information:staves self))
@@ -644,9 +969,9 @@
               ((not (null? (part-list:get-voice (cdar lst) voice)))
                           (part-list:get-voice (cdar lst) voice))
               (else (get-voice (cdr lst) voice))))))
-    (get-voice lst associated))))
+    (get-voice lst identification))))
 
-
+; a class holding values for the translation process
 (define-class <translation-status> (<music-information>)
   (chord-start-ticks #:init-value 0 #:init-keyword #:chord-start-ticks
       #:accessor translation-status:chord-start-ticks
@@ -671,6 +996,10 @@
       #:setter translation-status:set-context-tree! #:type <music-tree>)
 )
 
+; constructor of a <translation-status> object
+; parameter:
+;   document:
+;     The musicxml document where everything should be added
 (define make-translation-status (lambda (document)
   (assert (xml:document? document)
           report: '@make-translation-status)
@@ -679,15 +1008,25 @@
     #:voice-tree (make <music-tree>)
     #:context-tree (make <music-tree>))))
 
+; predicate for checking wether a object is a <translation-status>
 (define translation-status? (lambda (self)  (is-a? self <translation-status>)))
 
 ; forward declaration
 (define-class <music-item> ())
 
-(define translation-status:add-id  (lambda (self item id)
+; Add a identification name to an item (nr)
+; parameters:
+;   self:
+;     the translation-status instance to use
+;   item:
+;     A music-item
+;   id:
+;     The identification to add
+(define translation-status:add-identification
+        (lambda (self item identification)
   (assert (translation-status? self)
           (music-item? item)
-          report: '@translation-status:add-id)
+          report: '@translation-status:add-identification)
   (let* ((staff (music-information:staff-nr self))
     (voice (music-information:voice-nr self))
     (branch (translation-status:voice-tree self))
@@ -699,12 +1038,24 @@
     )
     (case type
       ((Staff)
-        (music-information:add-staff-id self staff id))
+        (music-information:add-staff-identification self staff identification))
       ((Voice NullVoice CueVoice)
-        (music-information:add-voice-id self staff voice id))
+        (music-information:add-voice-identification self staff voice identification))
     ))))
 
-(define translation-status:add-branch-to-voice-tree (lambda (self name)
+; add a branch to the voice tree.
+; also used for leafs ;)
+; whenever the music is divided, a branch is added. This branch is removed
+; when the division is ended. In this way we are able to reset things to the
+; state where the branch was started
+; parameters:
+;   self:
+;     the translation-status instance to use
+;   name:
+;     The name of the new branch, which is the name  the music item
+;     causing the branch.
+(define translation-status:add-branch-to-voice-tree
+        (lambda (self name)
   (assert (translation-status? self))
   (assert (symbol? name))
   (let ((branch (translation-status:voice-tree self)))
@@ -723,6 +1074,17 @@
             (music-information:voice-nr self)) '() )
       (music-information:set-ticks! self (music-tree:ticks branch)))))))
 
+; remove a branch to the voice tree.
+; also used for leafs ;)
+; whenever the music is divided, a branch is added. This branch is removed
+; when the division is ended. In this way we are able to reset things to the
+; state where the branch was started
+; parameters:
+;   self:
+;     the translation-status instance to use
+;   name:
+;     The name of the new branch, which is the name  the music item
+;     causing the branch.
 (define translation-status:remove-branch-from-voice-tree (lambda (self)
   (assert (translation-status? self))
   (let ((branch (music-tree:previous (translation-status:voice-tree self))))
@@ -732,15 +1094,34 @@
       '()
     ))))
 
+; get the current translation status context eg Staff, ChoirStaff or Voice
+; parameters:
+;   self:
+;     the translation-status instance to use
+; returns:
+;   an event representing the current context
 (define translation-status:current-context-spec (lambda (self)
   (assert (translation-status? self))
   (let ((context-type (translation-status:context-tree self)))
   (if (null? context-type) '() (music-tree:current-event context-type)))))
 
+; semitone -> pitch name lookup table.
+; modulo 12 should be applied to the semitone, before using this LUT
 (define pp-pitch-names '((0 . "C") (1 . "DES") (2 . "D") (3 . "ES") (4 . "E")
                         (5 . "F")  (6 . "GES") (7 . "G") (8 . "AS") (9 . "A")
                         (10 . "BES") (11 . "B")))
 
+; lilypond pitch to musicxml pitch translation
+; Adds a musicxml pitch element to a musicxml note element
+; (where note can also be lyric, figured bass ...)
+; parameters:
+;   p:
+;     pitch in ly:pitch format
+;   element:
+;     The note element where the pitch should be attached to
+;     (precondition 'note' not checked)
+;   doc:
+;     The xml document where the elements are created for
 (define music-pitch->xml-item  (lambda (p element doc)
   (assert (ly:pitch? p)
           (xml:element? element)
@@ -756,7 +1137,8 @@
     (alter-text (xml:createTextNode doc ( * 2 (ly:pitch-alteration p))))
     (octave (xml:createElement doc 'octave))
     (octave-text (xml:createTextNode doc ( + 4 (ly:pitch-octave p)))))
-    (xml:setUserData element 'pitch pitch) ; used for chord analysis
+    ;; todo: calculate accidentals? by comparing pitch with key etc.
+    (xml:setUserData element 'pitch pitch) ; <- to be used for chord analysis
     (xml:appendChild step step-text)
     (xml:appendChild alter alter-text)
     (xml:appendChild octave octave-text)
@@ -765,10 +1147,24 @@
     (xml:appendChild result octave)
     (xml:appendChild element result))))
 
-(define ticks-per-whole 192)
+; arbitrary value for ticks
+; chosen is for 3072 because you can divide it by 3
+; and when you have done that it is a power of 2
+; with this value the smallest possible normal note
+; is 1/1024th, which is the smallest note value in musicxml
+(define ticks-per-whole 3072)
+
+; define a default measure as a whole note length
+; arbitrary, but common use. if you want else, you
+; should use a time signature.
 (define default-measure-ticks ticks-per-whole)
 
-
+; translate a duration from lilypond to a note type-name from musicxml
+; parameters:
+;   duration:
+;     A lilypond duration object
+;   returns:
+;     a string that contains a valid musicxml note type name
 (define music-duration->notename (lambda (duration)
   (assert (ly:duration? duration)
           report: '@music-duration->notename)
@@ -788,25 +1184,41 @@
       (-2 . long  )
       (-3 . maxima )
       ))
-      (dlog (ly:duration-log duration)))
-    (assoc-get dlog duration-names))))
+      (duration-log (ly:duration-log duration)))
+    (assoc-get duration-log duration-names))))
 
+; get the dot count from a lilypond duration object
+; parameters:
+;   duration:
+;     A lilypond duration object
+;   returns:
+;     a string that contains a valid musicxml note type name
 (define music-duration->dots (lambda (duration)
   (assert (ly:duration? duration)
           report: '@music-duration->dots)
   (ly:duration-dot-count duration)))
 
-
+; translate a lilypond duration into the appropriate elements in
+; musicxml and add those elements to a musicxml note element
+; (where note can also be lyric, figured bass ...)
+; parameters:
+;   d:
+;     a lilypond duration
+;   doc:
+;     The xml document where the elements are created for
+;   parent:
+;     The note element where the duration should be attached to
+;     (precondition 'note' not checked)
 (define music-duration->xml-items (lambda (d doc parent)
   (assert (ly:duration? d)
           (xml:document? doc)
           (xml:element? parent)
           report: '@music-duration->xml-items)
-  (let* ((dlength (ly:duration-length d))
-      (dnumerator  (ly:moment-main-numerator dlength))
-      (ddenominator  (ly:moment-main-denominator dlength))
+  (let* ((duration-length (ly:duration-length d))
+      (duration-numerator  (ly:moment-main-numerator duration-length))
+      (duration-denominator  (ly:moment-main-denominator duration-length))
       (duration-element (xml:createElement doc 'duration))
-      (duration-value (/ (* ticks-per-whole dnumerator) ddenominator))
+      (duration-value (/ (* ticks-per-whole duration-numerator) duration-denominator))
       (duration-text (xml:createTextNode doc duration-value))
       (type-element (xml:createElement doc 'type))
       (type-text (xml:createTextNode doc (music-duration->notename d))))
@@ -818,22 +1230,37 @@
       (let ((dot (xml:createElement doc 'dot)))
         (xml:appendChild parent dot))))))
 
-(define music-time->xml-item (lambda (expr element doc)
+; extract a musicxml time signature from a lilypond TimeSignatureMusic event
+; parameters:
+;   expr:
+;     The lilypond TimeSignatureMusic event
+;     (not checked whether it is a TimeSignatureMusic event)
+;   doc:
+;     The xml document where the element is created for
+; returns:
+;   a musicxml time signature
+(define music-time->xml-item (lambda (expr doc)
   (assert (ly:music? expr)
-          (xml:element? element)
           (xml:document? doc)
           report: '@music-time->xml-item)
   (let* ((beats (ly:music-property expr 'numerator))
          (beat-type (ly:music-property expr 'denominator))
+      (time-element (xml:createElement doc 'time))
      (beat-element (make-xml-item doc 'beats beats))
      (type-element (make-xml-item doc 'beat-type beat-type))
      )
-     (xml:appendChild element beat-element)
-     (xml:appendChild element type-element))))
+     (xml:appendChild time-element beat-element)
+     (xml:appendChild time-element type-element)
+     time-element)))
 
-(define music-xml->ticks (lambda (item)
+; parameter:
+;   item:
+;     time signature musicxml element
+; returns: the number of ticks/measure associated with given musicxml
+; time signature or default (whole length) if no or invalid time signature found
+(define music-xml->ticks/measure (lambda (item)
   (assert (xml:element? item)
-          report: '@music-xml->ticks)
+          report: '@music-xml->ticks/measure)
   (cond ((equal? (xml:nodeName item) 'time)
     (let* ((numerator-item (xml:get-child-by-name  item 'beats))
         (denominator-item (xml:get-child-by-name  item 'beat-type))
@@ -842,43 +1269,51 @@
       (/ (* numerator ticks-per-whole) denominator)))
     (else default-measure-ticks))))
 
+; lookup table from pitch (semitones) to fifths, for a major key
 (define pp-pitch-major-fifth
   '((0 . 0) (1 . -5) (2 . 2) (3 . -3) (4 . 4) (5 . -1)
   (6 . -6) (7 . 1) (8 . -4) (9 . 3) (10 . -2) (11 . 5)))
 
-(define pp-reverse-pitch-major-fifth
-  '((0 . 0) (1 . 7) (2 . 2) (3 . 9) (4 . 4) (5 . 11)
-  (6 . 6) (7 . 1) (8 . 8) (9 . 3) (10 . 10) (11 . 5) ))
-
-(define pp-pitch-minor-fifth
-  '((0 . -3) (1 . 4) (2 . -1) (3 . -6) (4 . 1) (5 . -4)
-  (6 . 3) (7 . -2) (8 . 5) (9 . 0) (10 . -5) (11 . 2) ))
-
+; lookup table for fifth of mode to major fifth
+; so for minor substract 9 from the given major key
 (define pp-mode-list
-  '((1 . "lydian") (0 . "major") (6 . "locrian") (7 . "phrygian")
-   (8 . "minor") (9 . "dorian")))
+  '((0 . major) (1 . lydian) (7 . locrian) (8 . phrygian)
+   (9 . minor) (10 . dorian) (11 . mixolydian )
+   ))
 
-;; todo: find out about used mode
-;; minor -3
-;; dorian -2
-;; ionian 0
-;; locrian -5
-;; aeolian -3
-;; lydian +1
-;; phrygian -4
-
-(define music-key->xml-item (lambda (key element doc)
+; create the music xml translation of a KeyChangeEvent
+; parameters:
+;   key:
+;     lilypond KeyChangeEvent (not checked)
+;   doc:
+;     The xml document where the element is created for
+; returns:
+;   a musicxml key element
+(define music-key->xml-item (lambda (key doc)
   (assert (ly:music? key)
-          (xml:element? element)
           (xml:document? doc)
           report: '@music-key->xml-item)
-  (let* ((pitch-alist (ly:music-property key 'pitch-alist))
-    (fifths (if (null? pitch-alist) 0
-        (apply + (map (lambda(n) (* (cdr n) 2)) pitch-alist))))
-    (fifths-element (make-xml-item doc 'fifths fifths))
-    )
-     (xml:appendChild element fifths-element))))
+  ;; todo: add handling for non standard keys
+  (let ((key-element (xml:createElement doc 'key))
+        (pitch-alist (ly:music-property key 'pitch-alist))
+        (tonic (ly:music-property key 'tonic))
+        (fifths-element (make-xml-item doc 'fifths 0)))
+        (if (and tonic pitch-alist)
+          (let* ((c-pitch-alist (ly:transpose-key-alist pitch-alist
+                    (ly:pitch-diff (ly:make-pitch 0 0 0) tonic)))
+                (modus (modulo (apply + (map (lambda(n) (* (cdr n) 2)) c-pitch-alist)) 12))
+                (mode (assoc-get modus pp-mode-list))
+                (mode-element (make-xml-item doc 'mode mode))
+                (tonic-fifth (assoc-get (modulo (ly:pitch-semitones tonic) 12) pp-pitch-major-fifth))
+                (fifth (modulo (+ tonic-fifth modus) 12)))
+            (if (> fifth 6) (set! fifth (- fifth 12)))
+            (set! fifths-element (make-xml-item doc 'fifths fifth))
+            (xml:appendChild key-element fifths-element)
+            (xml:appendChild key-element mode-element)
+          ))
+    )))
 
+; a lookup list of all possible lilypond keys, with their musicxml equivalent
 (define clef-list
   '(("clefs.G" . G)
     ("clefs.GG" . G)
@@ -916,6 +1351,22 @@
     ("clefs.petrucci.g" . G)
     ("clefs.kievan.do" . C)))
 
+; the class music-item represents a lilypond event
+; Remark: not all lilypond event will have a corresponding <music-item>,
+; especially those items which are below the NoteEvent will be translated
+; direct into musicxml without the need of a <music-item>.
+; This class is created during, and only used during the translation phase.
+; Once the translation is complete, it is not used anymore
+; An instance of this class contains a reference to the lilypond event
+; a parent <music-item>
+; a reference to the music item containing the current context
+; (= ContextSpeccedMusic)
+; if applicable a reference to the corresponding musicxml item
+; a list of attributes:
+;  attributes can be anything that can be needed at a later point
+; a list of child <music-item>'s.
+; this correspondents with all element and elements items in the music member
+
 (define-class <music-item> ()
   (name #:init-value '() #:accessor music-item:name
       #:init-keyword #:name #:type <symbol>)
@@ -939,11 +1390,32 @@
       #:type <list>)
       )
 
+; predicate for checking wether a object is a <music-item>
 (define music-item? (lambda (self)  (is-a? self <music-item>)))
 
-(define make-empty-music-item (lambda ()
+; constructor of the root <music-item>
+; this item is only created once before the translation starts, and creates the
+; only music-item without actual related lilypond event.
+; All other <music-item>'s have a related lilypond event, and are descendants
+; of this item.
+;
+; returns:
+;  An empty <music-item>
+(define make-root-music-item (lambda ()
   (make <music-item>)))
 
+; constructor of a <music-item>
+; parameters
+;   name:
+;     the lilypond event of the related lilypond music
+;   music:
+;     the lilypond music expression related to this item
+;   context:
+;     The music item pointing to the context of this item
+;   parent:
+;     the parent of this item
+;
+; returns a <music-item> instance
 (define make-music-item (lambda (name music context parent)
   (assert (symbol? name)
           (ly:music? music)
@@ -956,16 +1428,33 @@
         #:context context
         #:parent parent
         )))
+    ; automatic append this item as child to the parent
     (music-item:append-child parent result)
     result)))
 
-
+; get the given attribute from this item
+; parameters:
+;   self:
+;     A <music-item> instance to use
+;   attr:
+;     the attribute to get
+;
+; returns:
+;   the attribute contents, or #f if no such attribute
 (define music-item:get-attribute (lambda (self attr)
   (assert (music-item? self)
           (symbol? attr)
           report: '@music-item:get-attribute)
   (assoc-get attr (music-item:attributes self))))
 
+; set an attribute on this item
+; parameters:
+;   self:
+;     A <music-item> instance to use
+;   key:
+;     the attribute to set
+;   value:
+;     the value to set on the attribute (can be any scheme value)
 (define music-item:set-attribute (lambda (self key value)
   (assert (music-item? self)
           (symbol? key)
@@ -973,6 +1462,12 @@
   (let ((lst (music-item:attributes self)))
     (music-item:set-attributes! self (assoc-set! lst key value)))))
 
+; append a (<music-item>) child to this <music-item>
+; parameters:
+;   self:
+;     A <music-item> instance to use
+;   child:
+;     the child to add
 (define music-item:append-child (lambda (self child)
   (assert (music-item? self)
           (music-item? child)
@@ -983,25 +1478,83 @@
           (else (cons (car lst) (item-append i (cdr lst))))))))
   (music-item:set-children! self (item-append child lst)))))
 
-(define get-item-stop (lambda (music item)
-  (assert (ly:music? music)
-          (symbol? item)
-          report: '@get-item-stop)
-  (case (ly:music-property music 'span-direction)
-    ((-1) item)
-    ((0) 'continue)
-    ((1) 'stop)
-    (else 'start))))
+; translate a span-direction music-property on the given event
+; to one of the given symbols.
+; parameters:
+;   music:
+;     the (lilypond) music expression containing a span direction
+;   negative-symbol:
+;     The symbol to return if span-direction is -1
+;   neutral-symbol:
+;     The symbol to return if span-direction is 0
+;   positive-symbol:
+;     The symbol to return if span-direction is 1
+;   default-symbol:
+;     The symbol to return if no af the conditions is met.
+;     So either no span-direction music-property is available,
+;     or this does not have one of the expected values
 
-(define get-start-stop (lambda (music)
-  (assert (ly:music? music)
-          report: '@get-start-stop)
+; returns:
+;   See description
+(define span-direction->symbol (lambda (music negative-symbol neutral-symbol positive-symbol default-symbol)  (assert (ly:music? music)
+          (symbol? negative-symbol)
+          (symbol? neutral-symbol)
+          (symbol? positive-symbol)
+          (symbol? default-symbol)
+          report: '@span-direction->symbol)
   (case (ly:music-property music 'span-direction)
-    ((-1) 'start)
-    ((0) 'continue)
-    ((1) 'stop)
-    (else 'start))))
+    ((-1) negative-symbol)
+    ((0) neutral-symbol)
+    ((1) positive-symbol)
+    (else default-symbol))))
 
+; translate a span-direction music-property on the given event
+; to one of the given symbols:
+
+;   music:
+;     the (lilypond) music expression containing a span direction
+;   item:
+;     The symbol to return if span-direction is -1
+; returns:
+;   the given symbol if span-direction is -1
+;   'continue if span-direction is 0
+;   'stop if span-direction is 1
+;   'dummy in all other cases (not expected)
+(define span-direction->item-stop (lambda (music item)
+  (span-direction->symbol music item 'continue 'stop 'dummy)))
+
+; translate a span-direction music-property on the given event
+; to one of the given symbols:
+
+;   music:
+;     the (lilypond) music expression containing a span direction
+;   item:
+;     The symbol to return if span-direction is -1
+; returns:
+;   'start if span-direction is -1
+;   'continue if span-direction is 0
+;   'stop if span-direction is 1
+;   'start in all other cases (not expected)
+(define span-direction->start-stop (lambda (music)
+  (span-direction->symbol music 'start 'continue 'stop 'start)))
+
+; translate a span-direction music-property on the given event
+; to one of the given symbols:
+
+;   music:
+;     the (lilypond) music expression containing a span direction
+;   item:
+;     The symbol to return if span-direction is -1
+; returns:
+;   'begin if span-direction is -1
+;   'continue if span-direction is 0
+;   'end if span-direction is 1
+;   'continue in all other cases (not expected)
+(define span-direction->begin-end (lambda (music)
+  (span-direction->symbol music 'begin 'continue 'end 'continue)))
+
+; translate a direction-articulation music-property on the given event
+; to an similar musicxml node :
 (define direction-articulations->xml-item (lambda (music context parent doc)
   (assert (ly:music? music)
           (music-item? context)
@@ -1021,12 +1574,12 @@
     (case lilyname
       ((DecrescendoEvent)
         (xml:setAttribute child-item 'type
-              (get-item-stop music 'diminuendo ))
+              (span-direction->item-stop music 'diminuendo ))
         (xml:appendChild item child-item)
         (xml:appendChild parent item))
       ((CrescendoEvent)
         (xml:setAttribute child-item 'type
-              (get-item-stop music 'crescendo))
+              (span-direction->item-stop music 'crescendo))
         (xml:appendChild item child-item)
         (xml:appendChild parent item))
       ((TextScriptEvent)
@@ -1036,6 +1589,23 @@
           (xml:appendChild item child-item)
           (xml:appendChild parent item)))))))
 
+; Within an xml node find a node with the given name,
+; if it does not exist create it
+; return this node
+(define find-or-create (lambda (parent child-name doc)
+  (assert (xml:element? parent)
+          (symbol? child-name)
+          (xml:document? doc)
+          report: '@find-or-create)
+  (let ((item-element (xml:get-child-by-name parent child-name)))
+  (cond ((not (xml:element? item-element))
+      (let* ((item (xml:createElement doc child-name)))
+        (xml:appendChild parent item)
+        item))
+      (else item-element)))))
+
+; translate an articulation music-property on the given event
+; to an similar musicxml node :
 (define articulations->xml-item (lambda (music context parent doc)
   (assert (ly:music? music)
           (music-item? context)
@@ -1068,26 +1638,23 @@
     (name (assoc-get lilyname articulation-names))
     (item-name (assoc-get lilyname item-names 'notations))
     (articulation-type (ly:music-property music 'articulation-type))
-    (item-element (xml:get-child-by-name parent item-name))
-    (should-append (not (xml:element? item-element)))
-    (item (xml:createElement doc item-name ))
+    (item (find-or-create parent item-name doc))
     (child-item (if (not name) '() (xml:createElement doc name))))
     (begin
-      (if should-append '() (set! item item-element))
       (case lilyname
         ((AbsoluteDynamicEvent)
           (let* ((dynamic (ly:music-property music 'text))
               (dynamic-item (xml:createElement doc dynamic)))
             (xml:appendChild child-item dynamic-item)))
         ((BeamEvent)
-          (xml:setAttribute item 'type  (get-start-stop music)))
+          (xml:appendChild item (xml:createTextNode doc (span-direction->begin-end music))))
         ((TieEvent)
-          (xml:setAttribute child-item 'type  (get-start-stop music)))
+          (xml:setAttribute child-item 'type  (span-direction->start-stop music)))
         ((SlurEvent)
-          (xml:setAttribute child-item 'type  (get-start-stop music))
+          (xml:setAttribute child-item 'type  (span-direction->start-stop music))
           (xml:setAttribute child-item 'number 1 ))
         ((PhrasingSlurEvent)
-          (xml:setAttribute child-item 'type  (get-start-stop music))
+          (xml:setAttribute child-item 'type  (span-direction->start-stop music))
           (xml:setAttribute child-item 'number 2 ))
         ((ArticulationEvent)
           (cond ((equal? articulation-type "stopped")
@@ -1098,18 +1665,16 @@
               ((fermata)
                 (set! child-item (xml:createElement doc 'fermata )))
               (else
-                (cond (articulation 
+                (cond (articulation
                   (let ((sub-item (xml:createElement doc
                             (assoc-get articulation-type art-types))))
                         (xml:appendChild child-item sub-item)
                 )))))))
         ((HyphenEvent)
-          (xml:appendChild item (xml:createTextNode doc 'begin))
-          (if should-append (xml:appendChild parent item)) '())
+          (xml:appendChild item (xml:createTextNode doc 'begin)))
       )
       (cond ((not (null? child-item ))
-        (xml:appendChild item child-item)
-        (if should-append (xml:appendChild parent item)) '()))))))
+        (xml:appendChild item child-item)))))))
 
 (define add-part-context-element (lambda (music element doc)
   (assert (music-item? music)
@@ -1224,21 +1789,22 @@
           (xml:document? doc)
           report: '@pre-process-context-specced-music)
   (let* ((part-name (ly:music-property music 'context-id))
-        (ctype (ly:music-property music 'context-type))
+        (context-type (ly:music-property music 'context-type))
         (parent-context (music-item:get-attribute parent 'context-type))
         (create-new (ly:music-property music 'create-new))
         (new-context (and (not (null? create-new)) create-new)))
-      (music-item:set-attribute item 'context-type ctype)
-      (cond (equal? (music-item:name (music-item:parent item)) 'SimultaneousMusic)
+      (music-item:set-attribute item 'context-type context-type)
+      (cond (equal? 
+        (music-item:name (music-item:parent item)) 'SimultaneousMusic)
         (music-item:set-attribute item 'parent-context parent-context))
       (cond ((not (null? part-name))
-        (translation-status:add-id status item part-name)))
+        (translation-status:add-identification status item part-name)))
       (cond (new-context
         (let* ((attributes-items (get-part-context-elements-copy item)))
           (music-item:set-part-context! item attributes-items)
-          (music-item:set-attribute item 'context-type ctype)
+          (music-item:set-attribute item 'context-type context-type)
         )
-        (case ctype
+        (case context-type
           ((ChoirStaff StaffGroup PianoStaff
             Staff DrumStaff TabStaff RhytmicStaff Lyrics)
             (music-information:set-staff-nr! status
@@ -1250,7 +1816,7 @@
                 (+ (music-information:max-voice-nr status) 1))
             (music-information:set-max-voice-nr! status
                 (music-information:voice-nr status))
-            (case ctype
+            (case context-type
               ((CueVoice) (music-information:set-cue-voice status
                   (music-information:staff-nr status)
                   (music-information:voice-nr status)))
@@ -1261,7 +1827,7 @@
       (let ((context-spec (translation-status:context-tree status)))
         (translation-status:set-context-tree! status
             (make-music-tree (music-information:staff-nr status)
-                ctype context-spec))))))
+                context-type context-spec))))))
 
 (define pre-process-event-chord
       (lambda (name music context status parent item doc)
@@ -1302,8 +1868,7 @@
           (music-item? item)
           (xml:document? doc)
           report: '@pre-process-key-change-event)
-  (let* ((att-item (xml:createElement doc 'key)))
-    (music-key->xml-item music att-item doc)
+  (let* ((att-item (music-key->xml-item music doc)))
     (add-part-context-element item att-item doc))))
 
 (define pre-process-page-break-event
@@ -1357,7 +1922,7 @@
   (cond ((not (null? value)) (music-item:set-attribute item 'value value )))
   (cond
       ;; currently only very limited properties can be set
-      ;; no support is yet for revert unset and once.
+      ;; no support is yet for revert, unset and once.
       ;; so let us skip those for now
       ((not (null? once)))
       ((equal? name 'PropertyUnset))
@@ -1386,8 +1951,8 @@
               (let ((attribute (get-part-context-element item 'clef)))
                 (cond ((xml:element? attribute)
                   (cond ((not (equal? value 0))
-                      (xml:appendChild attribute
-                          (make-xml-item doc 'clef-octave-change (/ value 7)))))))))
+                    (xml:appendChild attribute
+                      (make-xml-item doc 'clef-octave-change (/ value 7)))))))))
           ((whichBar)
             (case (translation-status:current-context-spec status)
               ((Timing)
@@ -1421,11 +1986,11 @@
           (music-item? item)
           (xml:document? doc)
           report: '@pre-process-note-event)
-  (let * ((parentname (if (null? parent) '()(music-item:name parent))))
+  (let * ((parent-name (if (null? parent) '()(music-item:name parent))))
     (case name
       ((NoteEvent BassFigureEvent LyricEvent)
         (translation-status:add-branch-to-voice-tree status name)
-        (cond ((equal? parentname 'EventChord)
+        (cond ((equal? parent-name 'EventChord)
             (music-information:set-ticks! status
                 (translation-status:chord-start-ticks status)))))
     )
@@ -1526,9 +2091,8 @@
           (music-item? item)
           (xml:document? doc)
           report: '@pre-process-time-signature-music)
-  (let* ((att-item (xml:createElement doc 'time)))
-    (music-time->xml-item music att-item doc)
-    (add-part-context-element item att-item doc))))
+  (let* ((time-element (music-time->xml-item music doc)))
+    (add-part-context-element item time-element doc))))
 
 
 (define pre-process-volta-repeated-music
@@ -1663,7 +2227,7 @@
       (beam-element (cond ((xml:element? note)
           (xml:get-child-by-name note 'beam)) (else '())))
       (beam-type (cond ((xml:element? beam-element)
-          (xml:getAttribute beam-element 'type)) (else '())))
+          (xml:element-value beam-element)) (else '())))
       (beam-status (translation-status:beam-status status)))
     ;; adapt tie status, as tie continue and tie stop are not in events
     ;; todo: resolve chord ties
@@ -1684,12 +2248,11 @@
     (if beam-status
       (if (null? beam-type)
           (cond ((xml:element? note)
-            (xml:appendChild note (make-xml-item doc 'beam
-                (acons 'type 'continue '())))))
-        (if (equal? beam-type 'stop)
+            (xml:appendChild note (make-xml-item doc 'beam 'continue))))
+        (if (equal? beam-type 'end)
           (translation-status:set-beam-status! status #f)
           '()))
-      (if (equal? beam-type 'start)
+      (if (equal? beam-type 'begin)
         (translation-status:set-beam-status! status #t)
         '() )))))
 
@@ -1735,6 +2298,8 @@
         (letrec ((normal-notes (ly:music-property music 'numerator))
             (actual-notes (ly:music-property music 'denominator))
             (insert-time-modifications (lambda (actual normal lst)
+              (let ((first-note #f)
+                  (last-note #f))
                 (for-each (lambda (node)
                     (let ((xml-node (music-item:xml-content node))
                         (actual-element (make-xml-item doc 'actual-notes actual))
@@ -1744,12 +2309,23 @@
                         (case (music-item:name node)
                           ((BassFigureEvent LyricEvent MultiMeasureRestMusic
                                NoteEvent RestEvent SkipEvent)
+                            (if (not first-note) (set! first-note xml-node)'())
+                            (set! last-note xml-node)
                             (xml:appendChild time-element actual-element)
                             (xml:appendChild time-element normal-element)
                             (xml:appendChild xml-node time-element)))
                         (insert-time-modifications actual normal
                             (music-item:children node)))))
-              lst))))
+              lst)
+              (if (equal? first-note last-note)
+                '()
+                (let ((first-notation (find-or-create first-note 'notations doc))
+                    (last-notation (find-or-create last-note 'notations doc))
+                    (first-tuplet (make-xml-item doc 'tuplet (acons 'type 'start '())))
+                    (last-tuplet (make-xml-item doc 'tuplet (acons 'type 'stop '()))))
+                  (xml:appendChild first-notation first-tuplet)
+                  (xml:appendChild last-notation last-tuplet)))
+              ))))
           (insert-time-modifications actual-notes normal-notes
               (music-item:children item)))))
 
@@ -1775,7 +2351,7 @@
           (stop-position (music-item:get-attribute item 'stop-position))
           (ending-number count))
           ; barline location attribute will be changes later,
-          ; if they are at a measure boundry
+          ; if they are at a measure boundary
         (xml:appendChild begin-barline-element begin-ending-element)
         (xml:setAttribute begin-barline-element 'location 'middle)
         (xml:setAttribute begin-ending-element 'number ending-number)
@@ -1839,11 +2415,11 @@
           (translation-status? status)
           (music-item? parent)
           report: '@music-children->music-item)
-  (let* ((e (ly:music-property music 'element))
-      (es (ly:music-property music 'elements)))
-   (cond ((ly:music? e) (music->music-item e context status parent )))
-   (cond ((pair? es)
-    (for-each (lambda (n) (music->music-item n context status parent)) es))))))
+  (let* ((element (ly:music-property music 'element))
+      (elements (ly:music-property music 'elements)))
+   (cond ((ly:music? element) (music->music-item element context status parent )))
+   (cond ((pair? elements)
+    (for-each (lambda (n) (music->music-item n context status parent)) elements))))))
 
 (define note->xml-item (lambda (music context status item doc)
   (assert (ly:music? music)
@@ -1868,7 +2444,7 @@
     (attributes (extract-part-context-element item doc))
     (direction-item (xml:createElement doc 'direction))
     (p (ly:music-property music 'pitch))
-        (d (ly:music-property music 'duration))
+    (d (ly:music-property music 'duration))
     )
       (music-item:set-xml-content! item element)
       (cond ((ly:duration? d) (music-duration->xml-items d doc element)))
@@ -1893,11 +2469,12 @@
         (music-information:insert-xml-element status direction-item)))
       (cond ((and (xml:element? element) (xml:hasChildNodes  element))
         (music-information:insert-xml-element status element)))
-      (music-information:collect-time-signatures status attributes element
+      (music-information:collect-time-signatures-and-update-position status attributes element
         ; time info from lyrics is not related to music time
         ; and chord notes should not influence timing
             (or (equal? lilyname 'LyricEvent) (translation-status:chord-item status))))))
 
+; mapping of lilypond events to methods to be called 
 (define pre-process-table
       `((ContextSpeccedMusic . , pre-process-context-specced-music)
       (EventChord . , pre-process-event-chord)
@@ -1941,7 +2518,7 @@
   (let* ((name (ly:music-property music 'name))
       (item (make-music-item name music context parent))
       (associated-context (ly:music-property music 'associated-context))
-      (childs-repeat-count 1)
+      (children-repeat-count 1)
       (doc (music-information:document status))
       (create-new (ly:music-property music 'create-new))
       (new-context (and (not (null? create-new)) create-new))
@@ -1954,10 +2531,10 @@
         (music-information:ticks status))
     (case name
       ((GraceMusic) ; do not use grace notes for now
-        (set! childs-repeat-count 0)
+        (set! children-repeat-count 0)
       )
       ((UnfoldedRepeatedMusic)
-        (set! childs-repeat-count (ly:music-property music 'repeat-count))
+        (set! children-repeat-count (ly:music-property music 'repeat-count))
         )
     )
     (let ((pre-process (assoc-get name pre-process-table)))
@@ -1965,7 +2542,7 @@
           (pre-process name music context status parent item doc))))
     (cond (new-context
         (set! context item)))
-    (do ((i 1 (1+ i))) ((> i childs-repeat-count))
+    (do ((i 1 (1+ i))) ((> i children-repeat-count))
       (music-children->music-item music context status item))
     (music-item:set-attribute item 'stop-position
         (music-information:ticks status))
@@ -2218,7 +2795,7 @@
           (music-information? status)
           (xml:document? doc)
           report: '@append-element-to-measure)
-  (let* ((attibutes (xml:get-child-by-name measure 'attributes))
+  (let* ((attributes (xml:get-child-by-name measure 'attributes))
       (measure-position (xml:getUserData measure 'position))
       (measure-ticks (xml:getUserData measure 'measure-ticks))
       (duration-element (xml:get-child-by-name element 'duration))
@@ -2280,7 +2857,7 @@
               (equal? position measure-position))
           (let ((ending-element (xml:get-child-by-name element 'ending)))
           ; repeat backward will get the location attribute left
-          ; and is placed at the end of the previous meeasure
+          ; and is placed at the end of the previous measure
           (cond ((and (not (null? (xml:previousSibling measure)))
                   (or
                     (and
@@ -2307,7 +2884,7 @@
           (xml:setAttribute element 'location 'right)
           (xml:appendChild measure element))
         (is-attributes-element
-          (merge-attributes attibutes element))
+          (merge-attributes attributes element))
         ((equal? (xml:nodeName element) 'barline)
           (xml:appendChild measure element))
         (else
@@ -2425,15 +3002,15 @@
 ;; -----------------------------------------------------------------------------
 
 
-(define remove-items-and-below (lambda (item  pname)
+(define remove-items-and-below (lambda (item  parent-name)
   (assert (xml:element? item)
-          (symbol? pname)
+          (symbol? parent-name)
           report: '@remove-items-and-below)
 (begin
-  (if (equal? (music-item:name item) pname)
+  (if (equal? (music-item:name item) parent-name)
     (xml:for-all-items  (lambda (n) (xml:set-name n #f)) item)
     (for-each
-      (lambda (n) (remove-items-and-below n pname))
+      (lambda (n) (remove-items-and-below n parent-name))
       (xml:element-children item))))))
 
 ;; for now: remove figured bass items
@@ -2583,7 +3160,7 @@
         (insert-group-start staff-nr header-item doc context-lst)
         (create-header-score-part header-item node doc)
         (insert-group-stop staff-nr header-item doc context-lst)))
-    (xml:xml:get-children-by-name item 'part)))))
+    (xml:get-children-by-name item 'part)))))
 
 (define has-measure-attribute (lambda (item attr)
   (assert (xml:element? item)
@@ -2620,7 +3197,7 @@
           report: '@get-measure-time)
   (let ((measure-attribute (xml:get-child-by-name item 'attributes)))
     (if (xml:element? measure-attribute)
-      (music-xml->ticks measure-attribute)
+      (music-xml->ticks/measure measure-attribute)
       default-measure-ticks))))
 
 (define reposition-end-barlines (lambda (item)
@@ -2636,7 +3213,7 @@
           (xml:removeChild parent node)
           (xml:appendChild parent node))
         '()))
-  (xml:xml:get-children-by-name item 'barline))))
+  (xml:get-children-by-name item 'barline))))
 
 ;; remove first backup item, from each element
 (define remove-first-backup (lambda (item)
@@ -2743,7 +3320,7 @@
           (order-items element item-name doc item-list)))
       item-order))))
 
-;; todo: the functioncalls in this function should be moved to cleanuptree
+;; todo: the function calls in this function should be moved to cleanuptree
 ;;       after those are implemented and tested
 (define not-cleanuptree (lambda (item information doc)
   (assert (xml:element? item))
@@ -2856,7 +3433,7 @@
           (xml:document? doc)
           report: '@create-doc-identification-elements)
   (if (null? modules)
-; no modules, we can not get information fromn it
+; no modules, we can not get information from it
     (let* ((identification-element (xml:createElement doc 'identification))
           (encoding-element (create-default-encoding doc)))
       (xml:appendChild identification-element encoding-element)
@@ -2935,7 +3512,7 @@
 (define make-first-music-item (lambda (doc)
   (assert (xml:document? doc)
           report: '@make-first-music-item)
-  (let* ((result (make-empty-music-item)))
+  (let* ((result (make-root-music-item)))
     (music-item:set-context! result result)
     (add-part-context-element result
         (make-xml-item doc 'divisions (/ ticks-per-whole 4)) doc)
